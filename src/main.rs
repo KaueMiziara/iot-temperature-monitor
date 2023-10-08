@@ -1,4 +1,10 @@
 use dht11::Dht11;
+use embedded_graphics::{
+    mono_font::{ascii::FONT_6X10, MonoTextStyleBuilder},
+    pixelcolor::BinaryColor,
+    prelude::*,
+    text::{Baseline, Text},
+};
 use esp_idf_hal::{delay::FreeRtos, gpio::*, i2c::*, peripherals::Peripherals, prelude::*};
 use esp_idf_sys as _;
 use iot_temperature_monitor::dht11_extension::Dht11Ext;
@@ -22,22 +28,45 @@ fn main() {
 
     let interface = I2CDisplayInterface::new(i2c);
 
-    let mut display =
-        Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate0).into_terminal_mode();
-
+    let mut display = Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate0)
+        .into_buffered_graphics_mode();
     display.init().unwrap();
-    display.clear().unwrap();
+
+    let text_style = MonoTextStyleBuilder::new()
+        .font(&FONT_6X10)
+        .text_color(BinaryColor::On)
+        .build();
 
     loop {
+        display.clear(BinaryColor::Off).unwrap();
         match dht11.read_data() {
             Ok(data) => {
                 println!("temp: {}ºC, humidity: {}%", data.temperature, data.humidity);
+
+                Text::with_baseline(
+                    format!("Temperature: {} C", data.temperature).as_str(),
+                    Point::zero(),
+                    text_style,
+                    Baseline::Top,
+                )
+                .draw(&mut display)
+                .unwrap();
+
+                Text::with_baseline(
+                    format!("Humidity: {}%", data.humidity).as_str(),
+                    Point::new(0, 16),
+                    text_style,
+                    Baseline::Top,
+                )
+                .draw(&mut display)
+                .unwrap();
             }
             Err(e) => {
                 println!("Error: {}", e);
             }
         }
 
-        FreeRtos::delay_ms(2000);
+        display.flush().unwrap();
+        FreeRtos::delay_ms(1500);
     }
 }

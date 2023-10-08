@@ -1,10 +1,7 @@
 use dht11::Dht11;
-use esp_idf_hal::{
-    delay::{Ets, FreeRtos},
-    gpio::*,
-    peripherals::Peripherals,
-};
+use esp_idf_hal::{delay::FreeRtos, gpio::*, peripherals::Peripherals};
 use esp_idf_sys as _;
+use iot_temperature_monitor::dht11_extension::Dht11Ext;
 
 fn main() {
     esp_idf_sys::link_patches();
@@ -15,15 +12,13 @@ fn main() {
     let mut dht11 = Dht11::new(dht11_pin);
 
     loop {
-        let mut dht11_delay = Ets;
-
-        match dht11.perform_measurement(&mut dht11_delay) {
-            Ok(measurement) => println!(
-                "temp: {}ºC, humidity: {}%",
-                (measurement.temperature as f32 / 10.),
-                (measurement.humidity as f32 / 10.)
-            ),
-            Err(e) => println!("{:?}", e),
+        match dht11.read_data() {
+            Ok(data) => {
+                println!("temp: {}ºC, humidity: {}%", data.temperature, data.humidity);
+            }
+            Err(e) => {
+                println!("Error: {}", e);
+            }
         }
 
         FreeRtos::delay_ms(2000);

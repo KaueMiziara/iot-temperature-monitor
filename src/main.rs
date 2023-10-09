@@ -1,4 +1,3 @@
-use anyhow;
 use dht11::Dht11;
 use embedded_graphics::{
     mono_font::{ascii::FONT_6X10, MonoTextStyleBuilder},
@@ -6,30 +5,30 @@ use embedded_graphics::{
     prelude::*,
     text::{Baseline, Text},
 };
-use embedded_svc::wifi::{self, AccessPointConfiguration, AuthMethod};
+use embedded_svc::wifi::AuthMethod;
 use esp_idf_hal::{delay::FreeRtos, gpio::*, i2c::*, peripherals::Peripherals, prelude::*};
-use esp_idf_svc::{
-    eventloop::EspSystemEventLoop,
-    http::server::EspHttpServer,
-    nvs::EspDefaultNvsPartition,
-    wifi::{BlockingWifi, EspWifi},
-};
+use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition, wifi::EspWifi};
 use esp_idf_sys as _;
-use log::*;
-use ssd1306::{prelude::*, I2CDisplayInterface, Ssd1306};
 use iot_temperature_monitor::dht11_extension::Dht11Ext;
+use ssd1306::{prelude::*, I2CDisplayInterface, Ssd1306};
 
-const SSID: &str = "ESP_WIFI";
-const PASSWORD: &str = "WIFI_PASS";
+use embedded_svc::wifi::{ClientConfiguration, Configuration};
 
-const STACK_SIZE: usize = 10240;
-const CHANNEL: u8 = 11;
+use esp_idf_svc::timer::EspTaskTimerService;
+use esp_idf_svc::wifi::AsyncWifi;
+
+use futures::executor::block_on;
+
+use log::info;
+
+const SSID: &str = "SSID";
+const PASSWORD: &str = "PASSWORD";
 
 fn main() -> anyhow::Result<()> {
     esp_idf_sys::link_patches();
-    esp_idf_svc::log::EspLogger::initialize_default();
 
     let peripherals = Peripherals::take().unwrap();
+
     let dht11_pin = PinDriver::input_output_od(peripherals.pins.gpio4.downgrade()).unwrap();
     let mut dht11 = Dht11::new(dht11_pin);
 
@@ -42,7 +41,25 @@ fn main() -> anyhow::Result<()> {
 
     let interface = I2CDisplayInterface::new(i2c);
 
-    let _server = create_server()?;
+    let sys_loop = EspSystemEventLoop::take()?;
+    let timer_service = EspTaskTimerService::new()?;
+    let nvs = EspDefaultNvsPartition::take()?;
+
+    let mut wifi = AsyncWifi::wrap(
+        EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs))?,
+        sys_loop,
+        timer_service,
+    )?;
+
+    block_on(connect_wifi(&mut wifi))?;
+
+    let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
+
+    info!("Wifi DHCP info: {:?}", ip_info);
+
+    info!("Shutting down in 5s...");
+
+    std::thread::sleep(core::time::Duration::from_secs(5));
 
     let mut display = Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate0)
         .into_buffered_graphics_mode();
@@ -87,39 +104,22 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-fn create_server() -> anyhow::Result<EspHttpServer> {
-    let peripherals = Peripherals::take().unwrap();
-    let sys_loop = EspSystemEventLoop::take()?;
-    let nvs = EspDefaultNvsPartition::take()?;
-
-    let mut wifi = BlockingWifi::wrap(
-        EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs))?,
-        sys_loop,
-    )?;
-
-    let wifi_configuration = wifi::Configuration::AccessPoint(AccessPointConfiguration {
+async fn connect_wifi(wifi: &mut AsyncWifi<EspWifi<'static>>) -> anyhow::Result<()> {
+    let wifi_configuration: Configuration = Configuration::Client(ClientConfiguration {
         ssid: SSID.into(),
-        ssid_hidden: true,
+        bssid: None,
         auth_method: AuthMethod::WPA2Personal,
         password: PASSWORD.into(),
-        channel: CHANNEL,
-        ..Default::default()
+        channel: None,
     });
+
     wifi.set_configuration(&wifi_configuration)?;
-    wifi.start()?;
-    wifi.wait_netif_up()?;
 
-    info!(
-        "Created Wi-Fi with WIFI_SSID `{}` and WIFI_PASS `{}`",
-        SSID, PASSWORD
-    );
+    wifi.start().await?;
+    info!("Wifi started");
 
-    let server_configuration = esp_idf_svc::http::server::Configuration {
-        stack_size: STACK_SIZE,
-        ..Default::default()
-    };
+    wifi.connect().await?;
+    info!("Wifi connected");
 
-    core::mem::forget(wifi);
-
-    Ok(EspHttpServer::new(&server_configuration)?)
+    Ok(())
 }

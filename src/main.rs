@@ -96,6 +96,14 @@ fn main() -> anyhow::Result<()> {
             }
             Err(e) => {
                 println!("Error: {}", e);
+                Text::with_baseline(
+                    format!("Error: {}", e).as_str(),
+                    Point::zero(),
+                    text_style,
+                    Baseline::Top,
+                )
+                .draw(&mut display)
+                .unwrap();
             }
         }
 
